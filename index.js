@@ -56,7 +56,7 @@ app.post("/api/call-click", (req, res) => {
 /* --------------------------------------------------
    STEP 2 — PBX CALL MATCHING
 -------------------------------------------------- */
-app.get("/api/check-calls", async (req, res) => {
+async function checkPBXCalls() {
     try {
         console.log("Checking PBX logs...");
 
@@ -101,18 +101,15 @@ app.get("/api/check-calls", async (req, res) => {
                 );
             }
         }
-
-        return res.json({
-            success: true,
-            message: "PBX logs checked"
-        });
     } catch (error) {
         console.error("PBX Error:", error.response?.data || error.message);
-        return res.status(500).json({
-            success: false,
-            error: "PBXact request failed"
-        });
     }
+}
+
+// Expose endpoint for manual triggering
+app.get("/api/check-calls", async (req, res) => {
+    await checkPBXCalls();
+    res.json({ success: true, message: "PBX logs checked" });
 });
 
 /* --------------------------------------------------
@@ -155,8 +152,14 @@ app.post("/api/send-lead", async (req, res) => {
    START SERVER
 -------------------------------------------------- */
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
     console.log(`Backend running on port ${PORT}`);
+
+    // Run PBX check immediately on startup
+    await checkPBXCalls();
+
+    // Optional: run every 5 minutes (for persistent memory in Railway container)
+    setInterval(checkPBXCalls, 5 * 60 * 1000);
 });
 
 
