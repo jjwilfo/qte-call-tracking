@@ -1,15 +1,15 @@
 {
   "name": "qte-call-tracking",
   "version": "1.0.0",
-  "description": "",
+  "description": "Backend for tracking call button clicks and sending leads to LeadDyno",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js"
   },
-  "keywords": [],
+  "keywords": ["call-tracking", "lead-generation", "hooklift trucks"],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "axios": "^1.13.2",
     "cors": "^2.8.5",
@@ -20,3 +20,8 @@
     "uuid": "^13.0.0"
   }
 }
+
+
+
+
+
