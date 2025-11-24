@@ -5,52 +5,67 @@ const { v4: uuidv4 } = require("uuid");
 const cors = require("cors");
 
 const app = express();
-
-// -----------------------------
-// CORS CONFIGURATION
-// -----------------------------
-app.use(cors({
-    origin: "https://www.qualitytruckandequipment.com", // your website
-    methods: ["GET", "POST", "OPTIONS"],
-    allowedHeaders: ["Content-Type"]
-}));
-
 app.use(express.json());
 
-// TEMP STORAGE (replace with Supabase later)
+// Allow your website domain AND the Railway domain
+app.use(
+    cors({
+        origin: [
+            "https://www.qualitytruckandequipment.com",
+            "https://qte-call-tracking-production.up.railway.app"
+        ],
+        methods: ["GET", "POST"],
+        allowedHeaders: ["Content-Type"]
+    })
+);
+
+// TEMP MEMORY (later replaced with Supabase)
 let clickEvents = [];
 
-/**
- * STEP 1 — Record call button clicks
- */
+/* --------------------------------------------------
+   STEP 1 — Save click event from the website
+-------------------------------------------------- */
 app.post("/api/call-click", (req, res) => {
     const { affiliateId, phoneNumber } = req.body;
+
+    const cleanNumber = phoneNumber.replace(/\D/g, ""); // Strip symbols
 
     const clickEvent = {
         id: uuidv4(),
         affiliateId: affiliateId || null,
-        phoneNumber,
+        clickedNumber: cleanNumber, // phone line clicked
         timestamp: Date.now(),
         matched: false
     };
 
     clickEvents.push(clickEvent);
+
     console.log("Saved Call Click:", clickEvent);
 
-    return res.json({ success: true, clickId: clickEvent.id });
+    return res.json({
+        success: true,
+        clickId: clickEvent.id
+    });
 });
 
-/**
- * STEP 2 — Check PBXact logs
- */
+/* --------------------------------------------------
+   STEP 2 — PBX CALL MATCHING
+   (Supabase cron or browser can call this)
+-------------------------------------------------- */
 app.get("/api/check-calls", async (req, res) => {
     try {
-        console.log("Checking PBXact logs...");
+        console.log("Checking PBX logs...");
 
         const pbxResponse = await axios.get(
             `${process.env.PBXACT_API_URL}/call-logs`,
             {
-                headers: { Authorization: `Bearer ${process.env.PBXACT_API_KEY}` }
+                headers: {
+                    Authorization: `Bearer ${process.env.PBXACT_API_KEY}`
+                },
+                // PBX ACT often uses HTTPS with invalid certs
+                httpsAgent: new (require("https").Agent)({
+                    rejectUnauthorized: false
+                })
             }
         );
 
@@ -59,42 +74,56 @@ app.get("/api/check-calls", async (req, res) => {
         for (let event of clickEvents) {
             if (event.matched) continue;
 
-            const match = pbxLogs.find(
-                (log) =>
-                    log.callerNumber === event.phoneNumber &&
+            // Find PBX log where the "calledNumber" matches the clicked number
+            const match = pbxLogs.find((log) => {
+                const pbxCalled = log.calledNumber?.replace(/\D/g, "");
+                return (
+                    pbxCalled === event.clickedNumber &&
                     log.timestamp >= event.timestamp
-            );
+                );
+            });
 
             if (match) {
                 console.log("Matched call:", match);
+
                 event.matched = true;
                 event.callTimestamp = match.timestamp;
+                event.callerNumber = match.callerNumber; // REAL CALLER ID
 
-                // Send lead to LeadDyno
-                await axios.post(`${process.env.BACKEND_URL}/api/send-lead`, {
-                    phoneNumber: event.phoneNumber,
-                    affiliateId: event.affiliateId,
-                    clickId: event.id,
-                    timestamp: event.timestamp
-                });
+                // Send lead to LeadDyno automatically
+                await axios.post(
+                    `${process.env.BACKEND_URL}/api/send-lead`,
+                    {
+                        phoneNumber: event.callerNumber,
+                        affiliateId: event.affiliateId,
+                        clickId: event.id,
+                        timestamp: event.timestamp
+                    }
+                );
             }
         }
 
-        return res.json({ success: true, message: "PBX logs checked" });
+        return res.json({
+            success: true,
+            message: "PBX logs checked"
+        });
     } catch (error) {
-        console.error("PBXACT Error:", error.message);
-        return res.status(500).json({ success: false, error: "PBXact request failed" });
+        console.error("PBX Error:", error.response?.data || error.message);
+        return res.status(500).json({
+            success: false,
+            error: "PBXact request failed"
+        });
     }
 });
 
-/**
- * STEP 3 — Send lead to LeadDyno
- */
+/* --------------------------------------------------
+   STEP 3 — SEND TO LEADDYNO
+-------------------------------------------------- */
 app.post("/api/send-lead", async (req, res) => {
     const { phoneNumber, affiliateId, clickId, timestamp } = req.body;
 
     try {
-        const response = await axios.post(
+        const leaddynoRes = await axios.post(
             "https://api.leaddyno.com/v1/leads",
             {
                 key: process.env.LEADDYNO_API_KEY,
@@ -102,23 +131,33 @@ app.post("/api/send-lead", async (req, res) => {
                 first_name: "Phone Lead",
                 last_name: clickId,
                 affiliate_id: affiliateId || "",
-                custom: { phoneNumber, clickId, clickTimestamp: timestamp }
+                custom: {
+                    callerPhone: phoneNumber,
+                    clickId,
+                    clickTimestamp: timestamp
+                }
             }
         );
 
-        console.log("LeadDyno Lead Sent:", response.data);
-        res.json({ success: true, sent: true });
+        console.log("LeadDyno Lead Sent:", leaddynoRes.data);
+
+        return res.json({ success: true, sent: true });
     } catch (error) {
         console.error("LeadDyno Error:", error.response?.data || error.message);
-        res.status(500).json({ success: false, error: "LeadDyno request failed" });
+
+        return res.status(500).json({
+            success: false,
+            error: "LeadDyno request failed"
+        });
     }
 });
 
-/**
- * START SERVER
- */
+/* --------------------------------------------------
+   START SERVER
+-------------------------------------------------- */
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Backend running on port ${PORT}`);
 });
+
 
