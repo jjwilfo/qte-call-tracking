@@ -3,6 +3,7 @@ const express = require("express");
 const axios = require("axios");
 const { v4: uuidv4 } = require("uuid");
 const cors = require("cors");
+const https = require("https");
 
 const app = express();
 app.use(express.json());
@@ -28,6 +29,10 @@ let clickEvents = [];
 app.post("/api/call-click", (req, res) => {
     const { affiliateId, phoneNumber } = req.body;
 
+    if (!phoneNumber) {
+        return res.status(400).json({ success: false, error: "Missing phoneNumber" });
+    }
+
     const cleanNumber = phoneNumber.replace(/\D/g, ""); // Strip symbols
 
     const clickEvent = {
@@ -50,7 +55,6 @@ app.post("/api/call-click", (req, res) => {
 
 /* --------------------------------------------------
    STEP 2 — PBX CALL MATCHING
-   (Supabase cron or browser can call this)
 -------------------------------------------------- */
 app.get("/api/check-calls", async (req, res) => {
     try {
@@ -62,8 +66,7 @@ app.get("/api/check-calls", async (req, res) => {
                 headers: {
                     Authorization: `Bearer ${process.env.PBXACT_API_KEY}`
                 },
-                // PBX ACT often uses HTTPS with invalid certs
-                httpsAgent: new (require("https").Agent)({
+                httpsAgent: new https.Agent({
                     rejectUnauthorized: false
                 })
             }
@@ -74,13 +77,9 @@ app.get("/api/check-calls", async (req, res) => {
         for (let event of clickEvents) {
             if (event.matched) continue;
 
-            // Find PBX log where the "calledNumber" matches the clicked number
             const match = pbxLogs.find((log) => {
                 const pbxCalled = log.calledNumber?.replace(/\D/g, "");
-                return (
-                    pbxCalled === event.clickedNumber &&
-                    log.timestamp >= event.timestamp
-                );
+                return pbxCalled === event.clickedNumber && log.timestamp >= event.timestamp;
             });
 
             if (match) {
@@ -88,9 +87,9 @@ app.get("/api/check-calls", async (req, res) => {
 
                 event.matched = true;
                 event.callTimestamp = match.timestamp;
-                event.callerNumber = match.callerNumber; // REAL CALLER ID
+                event.callerNumber = match.callerNumber;
 
-                // Send lead to LeadDyno automatically
+                // Auto-send lead to LeadDyno
                 await axios.post(
                     `${process.env.BACKEND_URL}/api/send-lead`,
                     {
@@ -159,5 +158,6 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`Backend running on port ${PORT}`);
 });
+
 
 
