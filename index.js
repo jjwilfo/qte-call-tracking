@@ -54,30 +54,55 @@ app.post("/api/call-click", (req, res) => {
 });
 
 /* --------------------------------------------------
-   STEP 2 — PBX CALL MATCHING
+   STEP 2 — PBX CALL MATCHING (token-based)
 -------------------------------------------------- */
+async function getPBXToken() {
+    try {
+        const res = await axios.post(
+            process.env.PBXACT_TOKEN_URL,
+            {
+                username: process.env.PBX_USERNAME,
+                password: process.env.PBX_PASSWORD
+            },
+            { httpsAgent: new https.Agent({ rejectUnauthorized: false }) }
+        );
+
+        return res.data?.token || null;
+    } catch (err) {
+        console.error("Error fetching PBX token:", err.message);
+        return null;
+    }
+}
+
+async function fetchPBXLogs(token) {
+    try {
+        const res = await axios.get(`${process.env.PBXACT_API_URL}/call-logs`, {
+            headers: { Authorization: `Bearer ${token}` },
+            httpsAgent: new https.Agent({ rejectUnauthorized: false })
+        });
+        return res.data.logs || [];
+    } catch (err) {
+        console.error("Error fetching PBX logs:", err.message);
+        return [];
+    }
+}
+
 async function checkPBXCalls() {
     try {
         console.log("Checking PBX logs...");
 
-        const pbxResponse = await axios.get(
-            `${process.env.PBXACT_API_URL}/call-logs`,
-            {
-                headers: {
-                    Authorization: `Bearer ${process.env.PBXACT_API_KEY}`
-                },
-                httpsAgent: new https.Agent({
-                    rejectUnauthorized: false
-                })
-            }
-        );
+        const token = await getPBXToken();
+        if (!token) {
+            console.error("No PBX token available. Skipping check.");
+            return;
+        }
 
-        const pbxLogs = pbxResponse.data.logs;
+        const pbxLogs = await fetchPBXLogs(token);
 
         for (let event of clickEvents) {
             if (event.matched) continue;
 
-            const match = pbxLogs.find((log) => {
+            const match = pbxLogs.find(log => {
                 const pbxCalled = log.calledNumber?.replace(/\D/g, "");
                 return pbxCalled === event.clickedNumber && log.timestamp >= event.timestamp;
             });
@@ -90,19 +115,16 @@ async function checkPBXCalls() {
                 event.callerNumber = match.callerNumber;
 
                 // Auto-send lead to LeadDyno
-                await axios.post(
-                    `${process.env.BACKEND_URL}/api/send-lead`,
-                    {
-                        phoneNumber: event.callerNumber,
-                        affiliateId: event.affiliateId,
-                        clickId: event.id,
-                        timestamp: event.timestamp
-                    }
-                );
+                await axios.post(`${process.env.BACKEND_URL}/api/send-lead`, {
+                    phoneNumber: event.callerNumber,
+                    affiliateId: event.affiliateId,
+                    clickId: event.id,
+                    timestamp: event.timestamp
+                });
             }
         }
-    } catch (error) {
-        console.error("PBX Error:", error.response?.data || error.message);
+    } catch (err) {
+        console.error("PBX Error:", err.message);
     }
 }
 
@@ -158,9 +180,10 @@ app.listen(PORT, async () => {
     // Run PBX check immediately on startup
     await checkPBXCalls();
 
-    // Optional: run every 5 minutes (for persistent memory in Railway container)
+    // Optional: run every 5 minutes
     setInterval(checkPBXCalls, 5 * 60 * 1000);
 });
+
 
 
 
